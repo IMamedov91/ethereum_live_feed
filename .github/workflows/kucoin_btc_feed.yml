@@ -8,25 +8,29 @@ on:
 jobs:
   push-feed:
     runs-on: ubuntu-latest
+
     steps:
+      # 1. Repo klonen
       - uses: actions/checkout@v4
 
+      # 2. Python klaarzetten
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 3. Dependencies
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir -r requirements.txt
+          if [ -f requirements.txt ] && [ -s requirements.txt ]; then
+            pip install --no-cache-dir -r requirements.txt
+          else
+            pip install --no-cache-dir pandas ta requests
+          fi
 
-      - name: Update Gist feed
+      # 4. Feed genereren & Gist bijwerken
+      - name: Update BTC Gist feed
         env:
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-          GIST_ID:    ${{ secrets.GIST_ID }}   # nieuwe Gist ID voor BTC!
-          ENDPOINT:   futures
-          SYMBOL:     BTCUSDTM
-          GRANULARITY: "15"
-          FILE_NAME:  btc_feed.json
+          GIST_TOKEN:  ${{ secrets.GIST_TOKEN }}
+          GIST_ID:     ${{ secrets.GIST_ID_BTC }}  # gebruik een aparte secret/ID
         run: python kucoin_btc_feed.py
-
