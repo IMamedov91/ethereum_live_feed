@@ -13,7 +13,7 @@ import pandas as pd, requests, ta
 
 # ───────────────────────── CONFIG ──────────────────────────────────
 ENDPOINT        = "futures"                       # altijd futures
-SYMBOL_DEFAULT  = os.getenv("SYMBOL", "BTCUSDTM")
+SYMBOL_DEFAULT  = os.getenv("SYMBOL", "XBTUSDTM")
 TF_DEFAULT_MIN  = int(os.getenv("GRANULARITY", "15"))   # minuten
 API_URL         = "https://api-futures.kucoin.com/api/v1/kline/query"
 MAX_LIMIT       = 500                             # futures limit
