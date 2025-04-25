@@ -31,6 +31,6 @@ jobs:
       # 4. Feed genereren & Gist bijwerken
       - name: Update BTC Gist feed
         env:
-          GIST_TOKEN:  ${{ secrets.GIST_TOKEN }}
+          GIST_TOKEN:  ${{ secrets.GIST_TOKEN_BTC }}
           GIST_ID:     ${{ secrets.GIST_ID_BTC }}  # gebruik een aparte secret/ID
         run: python kucoin_btc_feed.py
