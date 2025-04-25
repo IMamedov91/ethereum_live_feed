@@ -128,8 +128,8 @@ def push_gist(token: str, gist_id: str, fname: str, payload: dict) -> None:
 
 # ────────────────────────── MAIN ──────────────────────────────────
 def main() -> None:
-    gist_id = os.environ["GIST_ID"]
-    token = os.environ["GIST_TOKEN"]
+    gist_id = os.environ["GIST_ID_BTC"]
+    token = os.environ["GIST_TOKEN_BTC"]
 
     df = fetch_frame(SYMBOL_DEFAULT, TF_MIN)
     last = df.iloc[-1]
