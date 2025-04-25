@@ -1,1 +1,32 @@
+name: KuCoin BTC feed
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"        # elke 15 min
+  workflow_dispatch:
+
+jobs:
+  push-feed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Update Gist feed
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID:    ${{ secrets.GIST_ID }}   # nieuwe Gist ID voor BTC!
+          ENDPOINT:   futures
+          SYMBOL:     BTCUSDTM
+          GRANULARITY: "15"
+          FILE_NAME:  btc_feed.json
+        run: python kucoin_btc_feed.py
 
