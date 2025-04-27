@@ -39,7 +39,7 @@ GIST_TOKEN = os.getenv("GIST_TOKEN")
 
 PAIR = "BTC/USDT"
 TF = "15m"
-LIMIT = 300  # desired snapshot length (≤300)
+LIMIT = 3000  # desired snapshot length (≤300)
 TAAPI_URL = "https://api.taapi.io/bulk"
 
 # ────────────────────────────────────────────────────────────────
