@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-btc_feed_taapi.py — v2.0
+kucoin_btc_feed.py — v2.0
 Haalt 15-min-indicatoren (EMA20/50/200, RSI14, ATR14, VWAP) via TAAPI.io
 en uploadt de laatste candle + 300-bar snapshot naar je GitHub-gist.
 """
@@ -84,7 +84,7 @@ def push_gist(payload: dict) -> None:
     requests.patch(
         f"https://api.github.com/gists/{GIST_ID}",
         headers=headers,
-        json={"files":{"btc_feed.json":{"content":json.dumps(payload, indent=2)}}},
+        json={"files":{"kucoin_btc_feed.json":{"content":json.dumps(payload, indent=2)}}},
         timeout=10
     ).raise_for_status()
 
