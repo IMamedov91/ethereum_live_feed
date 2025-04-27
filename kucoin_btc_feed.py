@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-kucoin_btc_feed.py — v2.3
+kucoin_btc_feed.py — v2.4
 
 Fetches 15‑minute indicators (EMA20/50/200, RSI14, ATR14, VWAP) from TAAPI.io
-and uploads the latest candle plus a snapshot to your GitHub Gist.
+and uploads the latest candle plus a snapshot to your GitHub Gist.
 
-TAAPI LIMITS
-------------
-* The Bulk endpoint returns **max 20 candles** per indicator via the `results` parameter.
-* Need >20 candles? Loop over the Direct endpoint or persist history yourself.
+**TAAPI LIMITS & QUIRKS**
+------------------------
+* Bulk endpoint returns **max 20 candles** per indicator when using `results`.
+* Depending on the indicator, the `result` payload can be **either**
+  *a list of dicts* **or** a *dict containing arrays* (`timestamp`, `value`, …).
 
-Changes v2.3
+Changes v2.4
 ------------
-* `addResultTimestamp=True` and `results=20` set on **each** indicator (construct‑level is ignored).
-* Removed exotic Unicode symbols that occasionally break CI linters.
-* Extra defensive checks and clearer error messages.
+* Handles *vector‑style* payloads where `timestamp` is an **array** (fixes
+  `TypeError: int() argument must be … list`).
+* Cleaner helper `_ingest_bar()` to merge indicator values.
+* Minor: ensured `open´/`close`/etc. are ingested only when provided.
 """
 
 from __future__ import annotations
@@ -64,8 +66,7 @@ def fetch_indicators() -> List[Dict[str, Any]]:
     ]
 
     for ind in indicators:
-        ind["addResultTimestamp"] = True
-        ind["results"] = 20  # TAAPI Bulk max
+        ind.update({"addResultTimestamp": True, "results": 20})  # TAAPI Bulk max
 
     payload: Dict[str, Any] = {
         "secret": SECRET,
@@ -85,21 +86,56 @@ def fetch_indicators() -> List[Dict[str, Any]]:
 # Transform data
 # ────────────────────────────────────────────────────────────────
 
+def _ingest_bar(bars: Dict[int, Dict[str, Any]], ts: int, indicator_id: str, value: Any, ohlcv: Dict[str, Any]) -> None:
+    """Helper: insert/update a bar dict."""
+    cell = bars.setdefault(ts, {})
+    cell[indicator_id] = value
+    for k in ("open", "close", "high", "low", "volume"):
+        v = ohlcv.get(k)
+        if v is not None:
+            cell.setdefault(k, v)
+
+
 def reshape(data: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Merge indicator arrays into candle snapshots."""
+    """Merge indicator data into candle snapshots (handles list & vector styles)."""
     bars: Dict[int, Dict[str, Any]] = {}
 
     for item in data:
-        items = item["result"] if isinstance(item["result"], list) else [item["result"]]
-        for res in items:
-            ts_raw = res.get("timestamp") or res.get("timestampMs")
-            if ts_raw is None:
-                continue
-            ts = int(ts_raw)
-            cell = bars.setdefault(ts, {})
-            cell[item["id"]] = res["value"]
-            for key in ("open", "close", "high", "low", "volume"):
-                cell.setdefault(key, res.get(key))
+        indicator_id = item["id"]
+        res_obj = item["result"]
+
+        # Style 1: list[dict]
+        if isinstance(res_obj, list):
+            for res in res_obj:
+                ts_raw = res.get("timestamp") or res.get("timestampMs")
+                if ts_raw is None:
+                    continue
+                _ingest_bar(bars, int(ts_raw), indicator_id, res["value"], res)
+
+        # Style 2: dict with arrays
+        elif isinstance(res_obj, dict) and isinstance(res_obj.get("timestamp") or res_obj.get("timestampMs"), list):
+            ts_arr = res_obj.get("timestamp") or res_obj.get("timestampMs")
+            val_arr = res_obj["value"]
+            # optional arrays for OHLCV
+            open_arr = res_obj.get("open")
+            close_arr = res_obj.get("close")
+            high_arr = res_obj.get("high")
+            low_arr = res_obj.get("low")
+            vol_arr = res_obj.get("volume")
+
+            for idx, ts_raw in enumerate(ts_arr):
+                ohlcv = {
+                    "open":   open_arr[idx]   if open_arr   else None,
+                    "close":  close_arr[idx]  if close_arr  else None,
+                    "high":   high_arr[idx]   if high_arr   else None,
+                    "low":    low_arr[idx]    if low_arr    else None,
+                    "volume": vol_arr[idx]    if vol_arr    else None,
+                }
+                _ingest_bar(bars, int(ts_raw), indicator_id, val_arr[idx], ohlcv)
+
+        else:
+            # Unexpected shape — skip/ignore to avoid breaking the feed
+            continue
 
     if not bars:
         raise RuntimeError("TAAPI response contained no usable timestamps; check API key & limits.")
@@ -112,17 +148,17 @@ def reshape(data: List[Dict[str, Any]]) -> Dict[str, Any]:
         "datetime_utc": iso(last["ts"]),
         "symbol": PAIR.replace("/", ""),
         "granularity": TF,
-        "price": last["close"],
-        "high": last["high"],
-        "low": last["low"],
-        "vol": last["volume"],
+        "price": last.get("close"),
+        "high": last.get("high"),
+        "low": last.get("low"),
+        "vol": last.get("volume"),
         "ema20": last.get("ema20"),
         "ema50": last.get("ema50"),
         "ema200": last.get("ema200"),
         "rsi14": last.get("rsi14"),
         "vwap": last.get("vwap"),
         "atr14": last.get("atr14"),
-        "last_candles": ordered,  # max 20 with Bulk
+        "last_candles": ordered,  # max 20 with Bulk
         "funding_rate": None,
         "open_interest": None,
         "order_book": None,
