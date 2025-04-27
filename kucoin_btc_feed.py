@@ -1,98 +1,149 @@
 #!/usr/bin/env python3
 """
-kucoin_btc_feed.py — v2.0
-Haalt 15-min-indicatoren (EMA20/50/200, RSI14, ATR14, VWAP) via TAAPI.io
-en uploadt de laatste candle + 300-bar snapshot naar je GitHub-gist.
+kucoin_btc_feed.py — v2.1
+Haalt 15‑min‑indicatoren (EMA20/50/200, RSI14, ATR14, VWAP) via TAAPI.io
+en uploadt de laatste candle + 300‑bar snapshot naar je GitHub‑gist.
+
+Wijzigingen v2.1
+----------------
+* `addResultTimestamp=True` zodat de API weer een `timestamp` meegeeft.
+* Veilige fallback op `timestampMs` voor toekomstige API‑wijzigingen.
+* Kleinere refactor / type hints.
 """
 
-import time, os, json, requests, datetime as dt
+from __future__ import annotations
+import os, time, json, requests, datetime as dt
+from typing import Dict, List, Any
 
-SECRET = os.getenv("TAAPI_SECRET")                 # je TAAPI key
-GIST_ID = os.getenv("GIST_ID")
-GIST_TOKEN = os.getenv("GIST_TOKEN")
+# ────────────────────────────────────────────────────────────────
+# Configuratie uit environment
+# ────────────────────────────────────────────────────────────────
+SECRET     = os.getenv("TAAPI_SECRET")        # TAAPI‑key
+GIST_ID    = os.getenv("GIST_ID")             # GitHub‑gist ID
+GIST_TOKEN = os.getenv("GIST_TOKEN")          # GitHub‑token
 
-PAIR   = "BTC/USDT"
-TF     = "15m"
-LIMIT  = 300                                       # snapshotlengte
+PAIR   = "BTC/USDT"  # trading pair
+TF     = "15m"       # timeframe
+LIMIT  = 300         # snapshotlengte (aantal candles)
 
-def iso(ms: int) -> str:
-    return dt.datetime.utcfromtimestamp(ms/1000).isoformat(timespec="seconds") + "Z"
+TAAPI_URL = "https://api.taapi.io/bulk"
 
-def fetch_indicators() -> dict:
+# ────────────────────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────────────────────
+
+def iso(ms: int | float) -> str:
+    """Unix‑tijd in milliseconden ⇒ ISO‑8601 (UTC)."""
+    return (
+        dt.datetime.utcfromtimestamp(ms / 1000)
+        .isoformat(timespec="seconds") + "Z"
+    )
+
+# ────────────────────────────────────────────────────────────────
+# TAAPI integratie
+# ────────────────────────────────────────────────────────────────
+
+def fetch_indicators() -> List[Dict[str, Any]]:
+    """Vraagt indicator‑data op bij TAAPI.io (Bulk‑endpoint)."""
     payload = {
         "secret": SECRET,
         "construct": {
             "exchange": "binance",
-            "symbol":  PAIR,
+            "symbol": PAIR,
             "interval": TF,
-            "backtrack": LIMIT,            # laatste 300 candles
+            "backtrack": LIMIT,          # laatste 300 candles (zie docs / beperkingen)
+            "addResultTimestamp": True,  # zorg dat `timestamp` aanwezig blijft
             "indicators": [
-                {"id":"ema20","indicator":"ema","optInTimePeriod":20},
-                {"id":"ema50","indicator":"ema","optInTimePeriod":50},
-                {"id":"ema200","indicator":"ema","optInTimePeriod":200},
-                {"id":"rsi14","indicator":"rsi","optInTimePeriod":14},
-                {"id":"atr14","indicator":"atr","optInTimePeriod":14},
-                {"id":"vwap","indicator":"vwap","anchorPeriod":"session"}
-            ]
-        }
+                {"id": "ema20",  "indicator": "ema", "optInTimePeriod": 20},
+                {"id": "ema50",  "indicator": "ema", "optInTimePeriod": 50},
+                {"id": "ema200", "indicator": "ema", "optInTimePeriod": 200},
+                {"id": "rsi14",  "indicator": "rsi", "optInTimePeriod": 14},
+                {"id": "atr14",  "indicator": "atr", "optInTimePeriod": 14},
+                {"id": "vwap",   "indicator": "vwap", "anchorPeriod": "session"},
+            ],
+        },
     }
-    r = requests.post("https://api.taapi.io/bulk", json=payload, timeout=10)
-    r.raise_for_status()
-    return r.json()["data"]                          # lijst van indicator-dicts
 
-def reshape(data: list[dict]) -> dict:
-    # TAAPI bulk retourneert iedere indicator apart; we combineren op index
-    bars = {}
+    r = requests.post(TAAPI_URL, json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json()["data"]  # lijst van indicator‑dicts
+
+# ────────────────────────────────────────────────────────────────
+# Data transformeren
+# ────────────────────────────────────────────────────────────────
+
+def reshape(data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Bundelt afzonderlijke indicator‑responses tot één candle‑snapshot."""
+    bars: Dict[int, Dict[str, Any]] = {}
+
     for item in data:
-        bar = int(item["result"]["timestamp"])
-        bars.setdefault(bar, {})
-        key = item["id"]                   # bv. 'ema20'
-        bars[bar][key] = item["result"]["value"]
-        # voeg OHLCV alleen één keer toe (wordt herhaald per indicator)
-        for k in ("open","close","high","low","volume"):
-            bars[bar].setdefault(k, item["result"].get(k))
-    # sorteer en pak laatste LIMIT candles
-    ordered = [ {"ts":ts, **vals} for ts, vals in sorted(bars.items())[-LIMIT:] ]
-    last    = ordered[-1]
+        res = item["result"]
+        # defensieve timestamp extractie
+        ts_raw = res.get("timestamp") or res.get("timestampMs")
+        if ts_raw is None:
+            # sla veld over als er écht geen timestamp is (zou niet mogen gebeuren)
+            continue
+        bar = int(ts_raw)
+
+        # verzamel indicatoren + OHLCV per bar
+        cell = bars.setdefault(bar, {})
+        cell[item["id"]] = res["value"]  # indicator zelf
+        for k in ("open", "close", "high", "low", "volume"):
+            cell.setdefault(k, res.get(k))
+
+    # op volgorde & beperk tot LIMIT candles
+    ordered = [{"ts": ts, **vals} for ts, vals in sorted(bars.items())[-LIMIT:]]
+    last = ordered[-1]
+
     return {
         "timestamp": last["ts"],
         "datetime_utc": iso(last["ts"]),
-        "symbol": PAIR.replace("/",""),
+        "symbol": PAIR.replace("/", ""),
         "granularity": TF,
         "price": last["close"],
-        "high":  last["high"],
-        "low":   last["low"],
-        "vol":   last["volume"],
+        "high": last["high"],
+        "low": last["low"],
+        "vol": last["volume"],
         "ema20": last["ema20"],
         "ema50": last["ema50"],
-        "ema200":last["ema200"],
+        "ema200": last["ema200"],
         "rsi14": last["rsi14"],
-        "vwap":  last["vwap"],
+        "vwap": last["vwap"],
         "atr14": last["atr14"],
         "last_300_candles": ordered,
+        # placeholders voor toekomstige uitbreidingen
         "funding_rate": None,
         "open_interest": None,
         "order_book": None,
-        "generated_at": iso(int(time.time()*1000))
+        "generated_at": iso(int(time.time() * 1000)),
     }
 
-def push_gist(payload: dict) -> None:
+# ────────────────────────────────────────────────────────────────
+# GitHub Gist
+# ────────────────────────────────────────────────────────────────
+
+def push_gist(payload: Dict[str, Any]) -> None:
     headers = {
         "Authorization": f"token {GIST_TOKEN}",
-        "Accept": "application/vnd.github+json"
+        "Accept": "application/vnd.github+json",
     }
-    requests.patch(
+    r = requests.patch(
         f"https://api.github.com/gists/{GIST_ID}",
         headers=headers,
-        json={"files":{"kucoin_btc_feed.json":{"content":json.dumps(payload, indent=2)}}},
-        timeout=10
-    ).raise_for_status()
+        json={"files": {"kucoin_btc_feed.json": {"content": json.dumps(payload, indent=2)}}},
+        timeout=10,
+    )
+    r.raise_for_status()
 
-def main():
+# ────────────────────────────────────────────────────────────────
+# Entry‑point
+# ────────────────────────────────────────────────────────────────
+
+def main() -> None:
     data = fetch_indicators()
     payload = reshape(data)
     push_gist(payload)
-    print("✅ BTC TAAPI-feed geüpload:", payload["generated_at"])
+    print("✅ BTC TAAPI‑feed geüpload:", payload["generated_at"])
 
 if __name__ == "__main__":
     main()
