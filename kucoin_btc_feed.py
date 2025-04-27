@@ -74,8 +74,8 @@ def fetch_indicators() -> List[Dict[str, Any]]:
             "exchange": "binance",
             "symbol": PAIR,
             "interval": TF,
-            "backtrack": LIMIT
-            "indicators": indicators,
+            "backtrack": LIMIT,
+            "indicators": indicators
         },
     }
 
