@@ -28,4 +28,4 @@ jobs:
           TAAPI_SECRET: ${{ secrets.TAAPI_SECRET }}   # ➜ nieuw
           GIST_ID:      ${{ secrets.GIST_ID }}
           GIST_TOKEN:   ${{ secrets.GIST_TOKEN }}
-        run: python btc_feed.py
+        run: python kucoin_btc_feed.py
