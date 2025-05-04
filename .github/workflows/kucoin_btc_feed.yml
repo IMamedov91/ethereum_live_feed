@@ -35,7 +35,7 @@ jobs:
           GIST_ID:      ${{ secrets.GIST_ID }}
           GIST_TOKEN:   ${{ secrets.GIST_TOKEN }}
         run: |
-          python btc_feed.py > rawurl.txt
+          python kucoin_btc_feed.py > rawurl.txt
           echo "rawurl=$(cat rawurl.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Print latest raw URL
