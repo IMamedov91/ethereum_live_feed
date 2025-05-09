@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """
-BTC Futures Feed – Donchian‑Breakout Confluence
+BTC Futures Feed – Donchian-Breakout Confluence
 ================================================
-Strategy DNA
-------------
-* **Higher‑timeframe trend filter** (4‑hour EMA‑200 ↔ macro 200‑DMA concept)
-* **Lower‑timeframe breakout trigger** (20‑bar Donchian channel on 15‑minute)
-* **Volatility gate** (`ATR / price ≥ ATR_MIN`) – keeps noise trades out
-* **Rule‑based bias** (`long` / `short` / `flat`) – no discretionary override
-* **Signal TTL** = 900 s by default; downstream algo does position sizing
-
-Outputs a JSON payload pushed to a GitHub Gist, identical schema to the legacy
-`btc_feed.json`, so existing automations need zero refactor.
+Fix v1.1 – TAAPI indicator-compat & closed-candle integrity
+----------------------------------------------------------
+* Switched Donchian call to officially supported `donchianchannels` endpoint.
+* Added `backtrack=1` to Donchian + ATR to reference the last **closed** candle.
+* Adjusted JSON parse → `value.upper / value.lower` keys (per TAAPI spec).
+* Updated Workflow note: call `btc_donchian_feed.py` instead of legacy script.
 """
 
-import os, json, datetime as dt, requests, sys, time, pathlib
+import os, json, datetime as dt, requests, sys, pathlib
 from typing import Dict
 
 # ── ENV ─────────────────────────────────────────────────────────────
@@ -27,7 +23,7 @@ LOW_TF      = os.getenv("LOW_TF", "15m")        # trigger timeframe
 HIGH_TF     = os.getenv("HIGH_TF", "4h")         # trend filter timeframe
 DON_PERIOD  = int(os.getenv("DON_PERIOD", "20"))  # Donchian length
 ATR_MIN     = float(os.getenv("ATR_PCT_MIN", "0.003"))   # 0.3 %
-EMA_SLOPE_EPS= float(os.getenv("EMA_SLOPE_EPS", "0.0"))  # optional flat‑trend veto
+EMA_SLOPE_EPS = float(os.getenv("EMA_SLOPE_EPS", "0.0"))  # optional flat-trend veto
 FILE        = os.getenv("FILE_NAME", "btc_feed.json")
 HISTDIR     = pathlib.Path("history_btc")
 
@@ -37,7 +33,6 @@ REQ  = requests.Session()
 # ── Helpers ─────────────────────────────────────────────────────────
 
 def build_body(interval: str, indicators) -> Dict:
-    """Return TAAPI bulk body for the given interval and indicator list."""
     return {
         "secret": TAAPI_SECRET,
         "construct": {
@@ -50,27 +45,32 @@ def build_body(interval: str, indicators) -> Dict:
 
 
 def fetch_low() -> Dict:
-    """Collect lower‑timeframe indicators (breakout + volatility)."""
+    """Lower-TF indicators: Donchian breakout & volatility gate."""
     ind = [
-        {"id": "don", "indicator": "donchian", "period": DON_PERIOD},
-        {"id": "atr", "indicator": "atr", "period": 14},
+        {
+            "id": "don",
+            "indicator": "donchianchannels",
+            "period": DON_PERIOD,
+            "backtrack": 1,  # ensure closed-candle breakout
+        },
+        {"id": "atr", "indicator": "atr", "period": 14, "backtrack": 1},
         {"id": "price", "indicator": "price"},
     ]
     r = REQ.post(f"{BASE}/bulk", json=build_body(LOW_TF, ind), timeout=12)
     r.raise_for_status()
     data = {x["id"]: x["result"] for x in r.json()["data"]}
     return {
-        "donHigh": data["don"]["upperBand"],
-        "donLow":  data["don"]["lowerBand"],
+        "donHigh": data["don"]["value"]["upper"],
+        "donLow":  data["don"]["value"]["lower"],
         "atr":     data["atr"]["value"],
         "price":   data["price"]["value"],
     }
 
 
 def fetch_high() -> Dict:
-    """Collect higher‑timeframe trend filter (EMA‑200 + slope)."""
+    """Higher-TF trend filter (EMA-200 + slope)."""
     ind = [
-        {"id": "ema200", "indicator": "ema", "period": 200},
+        {"id": "ema200", "indicator": "ema", "period": 200, "backtrack": 0},
         {"id": "ema200prev", "indicator": "ema", "period": 200, "backtrack": 1},
     ]
     r = REQ.post(f"{BASE}/bulk", json=build_body(HIGH_TF, ind), timeout=12)
@@ -104,7 +104,7 @@ def decide(low: Dict, high: Dict) -> str:
     return "flat"
 
 
-# ── Main │ Side‑effects: history + Gist push ───────────────────────
+# ── Main │ History + Gist push ─────────────────────────────────────
 
 def main():
     low  = fetch_low()
@@ -112,9 +112,9 @@ def main():
     bias = decide(low, high)
 
     reason = {
-        "long":  "breakout‑long",
-        "short": "breakout‑short",
-        "flat":  "no‑setup",
+        "long":  "don-breakout-long",
+        "short": "don-breakout-short",
+        "flat":  "no-setup",
     }[bias]
 
     payload = {
@@ -133,11 +133,9 @@ def main():
         "ttl_sec": 900,
     }
 
-    # history snapshot
     HISTDIR.mkdir(exist_ok=True)
     (HISTDIR / f"{payload['timestamp']}.json").write_text(json.dumps(payload))
 
-    # push to gist
     body = {"files": {FILE: {"content": json.dumps(payload, indent=2)}}}
     r = REQ.patch(
         f"https://api.github.com/gists/{GIST_ID}",
